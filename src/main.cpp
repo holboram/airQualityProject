@@ -8,8 +8,22 @@
 #include <ArduinoJson.h>
 #include <TimeLib.h> // Include the Time library for time conversion
 #include <SdsDustSensor.h>
+#include <SPI.h>
 
 #include "arduino_secrets.h"
+
+// Pin definitions
+const int CS_PIN = 7; // Chip Select
+const int AN_PIN = A0; // Analog pin
+
+// Constants for conversion
+const float RL = 10.0; // Load resistance in kOhms
+const float RO = 3.0; // Sensor resistance in clean air
+const float A = 0.99; // Constant for MQ131
+const float B = -0.38; // Constant for MQ131
+
+// Number of readings for averaging
+const int NUM_READINGS = 10;
 
 // Function declarations
 unsigned long getTime();
@@ -31,7 +45,6 @@ SdsDustSensor sds(Serial1);
 
 NB nbAccess;
 GPRS gprs;
-
 NBClient      nbClient;            // Used for the TCP socket connection
 BearSSLClient sslClient(nbClient); // Used for SSL/TLS connection, integrates with ECC508
 MqttClient    mqttClient(sslClient);
@@ -82,6 +95,12 @@ void setup() {
   sds.setActiveReportingMode();
   sds.setQueryReportingMode();
 
+  // Initialize SPI
+  SPI.begin();
+
+  // Set pin modes
+  pinMode(CS_PIN, OUTPUT);
+  digitalWrite(CS_PIN, HIGH);
 }
 
 void loop() {
