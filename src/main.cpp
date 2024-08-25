@@ -204,6 +204,7 @@ void publishMessage(float pm25, float pm10) {
 }
 
 void onMessageReceived(int messageSize) {
+
   // we received a message, print out the topic and contents
   Serial.print("Received a message with topic '");
   Serial.print(mqttClient.messageTopic());
@@ -219,4 +220,40 @@ void onMessageReceived(int messageSize) {
 
   Serial.println();
 
+}
+
+float readO3Sensor() {
+  // Select the sensor
+  digitalWrite(CS_PIN, LOW);
+  
+  // Read analog value
+  int sensorValue = analogRead(AN_PIN);
+  
+  // Deselect the sensor
+  digitalWrite(CS_PIN, HIGH);
+  
+  // Convert to voltage
+  float voltage = sensorValue * (5.0 / 1023.0);
+  
+  // Calculate resistance of the sensor
+  float RS = (5.0 - voltage) / voltage * RL;
+  
+  return RS;
+}
+
+float calculateO3PPM(float RS) {
+  // Calculate ratio
+  float ratio = RS / RO;
+  
+  // Calculate PPM using the equation
+  float ppm = A * pow(ratio, B);
+  
+  return ppm;
+}
+
+float calculateO3MicrogramPerM3(float ppm) {
+  // Convert PPM to microgram/m³
+  float microgramPerM3 = ppm * 214.4; // Conversion factor for O3
+  
+  return microgramPerM3;
 }
