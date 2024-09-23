@@ -29,11 +29,15 @@ const int NUM_READINGS = 10;
 unsigned long getTime();
 void connectNB();
 void connectMQTT();
-void publishMessage(float pm25, float pm10);
+void publishMessage(float pm25, float pm10, float o3microgramPerM3);
 void onMessageReceived(int messageSize);
-float readSensor() {};
-float calculatePPM(float RS) {};
-float calculateMicrogramPerM3(float ppm) {};
+float readO3Sensor();
+
+float calculateO3PPM(float RS);
+
+float calculateO3MicrogramPerM3(float ppm);
+
+float getAverageRS();
 
 // Sensitive data in arduino_secrets.h
 const char pinnumber[]   = SECRET_PINNUMBER;
@@ -122,10 +126,17 @@ void loop() {
 
     // Read the dust sensor data
     PmResult pm = sds.queryPm();
-    if (pm.isOk()) {
+    //Read the O3 sensor data
+    float averageO3Readings = getAverageRS();
+     // Calculate PPM
+    float ppm = calculateO3PPM(averageO3Readings);
+    // Calculate microgram/m³
+    float o3microgramPerM3 = calculateO3MicrogramPerM3(ppm);
+
+    if (pm.isOk() && o3microgramPerM3) {
       float pm25 = pm.pm25;
       float pm10 = pm.pm10;
-      publishMessage(pm25, pm10);
+      publishMessage(pm25, pm10, o3microgramPerM3);
       
     }
     
@@ -171,7 +182,7 @@ void connectMQTT() {
   mqttClient.subscribe("devices/" + deviceId + "/messages/devicebound/#");
 }
 
-void publishMessage(float pm25, float pm10) {
+void publishMessage(float pm25, float pm10, float o3) {
   // Get the current time in UTC
   unsigned long utcTime = getTime();
 
@@ -190,6 +201,7 @@ void publishMessage(float pm25, float pm10) {
   //doc["deviceId"] = deviceId;
   doc["pm:2.5"] = pm25;
   doc["pm:10"] = pm10;
+  doc["O3"] = o3;
   doc["localTime"] = localTime;
 
   String telemetry;
@@ -223,6 +235,7 @@ void onMessageReceived(int messageSize) {
 }
 
 float readO3Sensor() {
+
   // Select the sensor
   digitalWrite(CS_PIN, LOW);
   
@@ -237,7 +250,7 @@ float readO3Sensor() {
   
   // Calculate resistance of the sensor
   float RS = (5.0 - voltage) / voltage * RL;
-  
+
   return RS;
 }
 
@@ -257,3 +270,15 @@ float calculateO3MicrogramPerM3(float ppm) {
   
   return microgramPerM3;
 }
+
+float getAverageRS() {
+    float totalRS = 0;
+    
+    // Take multiple readings and average them
+    for (int i = 0; i < NUM_READINGS; i++) {
+      totalRS += readO3Sensor();
+      delay(100); // Small delay between readings
+    }
+    
+    return totalRS / NUM_READINGS;
+  }
