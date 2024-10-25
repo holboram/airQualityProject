@@ -25,11 +25,14 @@ const float B = -0.38; // Constant for MQ131
 // Number of readings for averaging
 const int NUM_READINGS = 10;
 
+// Constant for SO2 sensor 
+const int gasPin = A1; // SO2 sensor output pin
+
 // Function declarations
 unsigned long getTime();
 void connectNB();
 void connectMQTT();
-void publishMessage(float pm25, float pm10, float o3microgramPerM3);
+void publishMessage(float pm25, float pm10, float o3microgramPerM3, float so2);
 void onMessageReceived(int messageSize);
 float readO3Sensor();
 
@@ -38,6 +41,8 @@ float calculateO3PPM(float RS);
 float calculateO3MicrogramPerM3(float ppm);
 
 float getAverageRS();
+
+float getSO2();
 
 // Sensitive data in arduino_secrets.h
 const char pinnumber[]   = SECRET_PINNUMBER;
@@ -133,10 +138,13 @@ void loop() {
     // Calculate microgram/m³
     float o3microgramPerM3 = calculateO3MicrogramPerM3(ppm);
 
-    if (pm.isOk() && o3microgramPerM3) {
+    // Read the SO2 sensor data
+    float so2 = getSO2();
+
+    if (pm.isOk() && o3microgramPerM3 && so2) {
       float pm25 = pm.pm25;
       float pm10 = pm.pm10;
-      publishMessage(pm25, pm10, o3microgramPerM3);
+      publishMessage(pm25, pm10, o3microgramPerM3, so2);
       
     }
     
@@ -182,7 +190,7 @@ void connectMQTT() {
   mqttClient.subscribe("devices/" + deviceId + "/messages/devicebound/#");
 }
 
-void publishMessage(float pm25, float pm10, float o3) {
+void publishMessage(float pm25, float pm10, float o3, float so2) {
   // Get the current time in UTC
   unsigned long utcTime = getTime();
 
@@ -202,6 +210,7 @@ void publishMessage(float pm25, float pm10, float o3) {
   doc["pm:2.5"] = pm25;
   doc["pm:10"] = pm10;
   doc["O3"] = o3;
+  doc["SO2"] = so2;
   doc["localTime"] = localTime;
 
   String telemetry;
@@ -281,4 +290,22 @@ float getAverageRS() {
     }
     
     return totalRS / NUM_READINGS;
+  }
+
+  float getSO2() {
+    const float sensorSensitivity = 0.003; // Sensitivity in volts per ppm (3.0 mV/ppm) from datasheet
+    const float V_REF = 3.3;   // Reference voltage for MKR NB 1500
+    const float ppmToMicrogramPerM3 = 2629.75; // Conversion factor from ppm to µg/m^3 for SO2
+
+    // Read the analog voltage from the SO2 sensor on A1
+    int sensorValue = analogRead(gasPin);
+    float voltage = sensorValue * (V_REF / 1023.0);  // Calculate the voltage
+
+    // Calculate SO2 concentration in ppm using the confirmed sensitivity from the datasheet
+    float so2_concentration_ppm = voltage / sensorSensitivity;
+
+    // Convert ppm concentration to micrograms per cubic meter (µg/m^3)
+    float so2_concentration_ug_m3 = so2_concentration_ppm * ppmToMicrogramPerM3;
+
+    return so2_concentration_ug_m3;
   }
