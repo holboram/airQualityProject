@@ -191,27 +191,16 @@ void connectMQTT() {
 }
 
 void publishMessage(float pm25, float pm10, float o3, float so2) {
-  // Get the current time in UTC
-  unsigned long utcTime = getTime();
 
-  // Convert UTC time to local time (assuming local time is UTC+1)
-  unsigned long localTime = utcTime + 3600; // Adjust for local time zone
-  
-  // Convert local time to human-readable format
-  setTime(localTime);
-  char timeString[25];
-  snprintf(timeString, sizeof(timeString), "%04d-%02d-%02dT%02d:%02d:%02dZ", year(), month(), day(), hour(), minute(), second());
-
-  //static int messageId = 0; // Declare and initialize the 'meesageId' variable
+  static int messageId = 0; // Declare and initialize the 'meesageId' variable
   DynamicJsonDocument doc(1024);
-  //doc["id"] = messageId++;
-  //doc["partitionKey"] = "Timestamp";
-  //doc["deviceId"] = deviceId;
+  doc["id"] = messageId++;
+  doc["partitionKey"] = "Timestamp";
+  doc["deviceId"] = deviceId;
   doc["pm:2.5"] = pm25;
   doc["pm:10"] = pm10;
   doc["O3"] = o3;
   doc["SO2"] = so2;
-  doc["localTime"] = localTime;
 
   String telemetry;
   serializeJson(doc, telemetry);
@@ -292,20 +281,31 @@ float getAverageRS() {
     return totalRS / NUM_READINGS;
   }
 
-  float getSO2() {
-    const float sensorSensitivity = 0.003; // Sensitivity in volts per ppm (3.0 mV/ppm) from datasheet
+float getSO2() {
+    const float sensorSensitivity = 0.002; // Sensitivity in volts per ppm (2.0 mV/ppm) from datasheet
     const float V_REF = 3.3;   // Reference voltage for MKR NB 1500
-    const float ppmToMicrogramPerM3 = 2629.75; // Conversion factor from ppm to µg/m^3 for SO2
+    const float ppmToMicrogramPerM3 = 2859.07; // Corrected conversion factor from ppm to µg/m^3 for SO2
+    const float calibrationFactor = 0.001; // Adjust this factor based on calibration
 
     // Read the analog voltage from the SO2 sensor on A1
     int sensorValue = analogRead(gasPin);
     float voltage = sensorValue * (V_REF / 1023.0);  // Calculate the voltage
 
     // Calculate SO2 concentration in ppm using the confirmed sensitivity from the datasheet
-    float so2_concentration_ppm = voltage / sensorSensitivity;
+    float so2_concentration_ppm = (voltage / sensorSensitivity) * calibrationFactor;
 
     // Convert ppm concentration to micrograms per cubic meter (µg/m^3)
     float so2_concentration_ug_m3 = so2_concentration_ppm * ppmToMicrogramPerM3;
+
+    // Debugging: Print intermediate values for verification
+    Serial.print("Sensor Value: ");
+    Serial.println(sensorValue);
+    Serial.print("Voltage: ");
+    Serial.println(voltage);
+    Serial.print("SO2 Concentration (ppm): ");
+    Serial.println(so2_concentration_ppm);
+    Serial.print("SO2 Concentration (µg/m³): ");
+    Serial.println(so2_concentration_ug_m3);
 
     return so2_concentration_ug_m3;
   }
