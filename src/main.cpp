@@ -26,7 +26,28 @@ const float B = -0.38; // Constant for MQ131
 const int NUM_READINGS = 10;
 
 // Constant for SO2 sensor 
-const int gasPin = A1; // SO2 sensor output pin
+const int VgasPin = A1;   // Pin connected to Vgas for gas concentration
+const int VrefPin = A2;   // Pin connected to Vref for reference
+const int VtempPin = A3;  // Pin connected to Vtemp for temperature
+const float molecularWeightSO2 = 64.07; // Molecular weight of SO2 in g/mol
+const float molarVolume = 24.45; // molar volume of an ideal gas at standard temp and press (STP) in liters.
+double sensitivityCode = 41.74; // Example sensitivity code from the sensor label
+double TIA_Gain = 100.0; // TIA gain for Sulfur Dioxide
+double M = sensitivityCode*TIA_Gain*0.000001; // Sensitivity in V/ppm
+const float VgasZeroVoltage = 1.75; // Zero voltage for SO2 sensor
+
+// Sensor sensitivity at 20 °C (room temperature) in V/ppm
+const float baselineSensitivity = 0.003; // Sensitivity in V/ppm
+const float baselineTemp = 20.0; // Baseline temperature for calibration
+
+// Temperature coefficients for sensitivity adjustments
+const float spanCoeffLow = -0.0033;  // -0.33% per °C (below 20°C)
+const float spanCoeffHigh = 0.0026;  // +0.26% per °C (above 20°C)
+const float offsetCoeffLow = 0.056;  // ppm/°C (0 to 25°C)
+const float offsetCoeffHigh = 0.46;   // ppm/°C (25 to 40°C)
+
+// Global variable to hold the zero offset for gas voltage
+float zeroOffset = 0.0;
 
 // Function declarations
 unsigned long getTime();
@@ -43,6 +64,7 @@ float calculateO3MicrogramPerM3(float ppm);
 float getAverageRS();
 
 float getSO2();
+float getTemperature(float VtempVoltage);
 
 // Sensitive data in arduino_secrets.h
 const char pinnumber[]   = SECRET_PINNUMBER;
@@ -110,6 +132,7 @@ void setup() {
   // Set pin modes
   pinMode(CS_PIN, OUTPUT);
   digitalWrite(CS_PIN, HIGH);
+
 }
 
 void loop() {
@@ -126,7 +149,7 @@ void loop() {
   mqttClient.poll();
 
   // publish a message roughly every 10 sec.
-  if (millis() - lastMillis > 60000) {
+  if (millis() - lastMillis > 600) {
     lastMillis = millis();
 
     // Read the dust sensor data
@@ -281,31 +304,62 @@ float getAverageRS() {
     return totalRS / NUM_READINGS;
   }
 
+
 float getSO2() {
-    const float sensorSensitivity = 0.002; // Sensitivity in volts per ppm (2.0 mV/ppm) from datasheet
-    const float V_REF = 3.3;   // Reference voltage for MKR NB 1500
-    const float ppmToMicrogramPerM3 = 2859.07; // Corrected conversion factor from ppm to µg/m^3 for SO2
-    const float calibrationFactor = 0.001; // Adjust this factor based on calibration
+    int Vgas = analogRead(VgasPin);      // Read gas concentration
+    int Vref = analogRead(VrefPin);      // Read reference voltage
+    int Vtemp = analogRead(VtempPin);    // Read temperature
+  
+    // Convert the analog readings to voltages (assuming 3.3V and 10-bit ADC)
+    double VrefVoltage = Vref * (3.3 / 1023.00);
+    double VtempVoltage = Vtemp * (3.3 / 1023.00);
+    double VgasVoltage = Vgas/1023.00*3.3;
+    float VgasPPM = 1/M*(VgasVoltage-VgasZeroVoltage); // Convert to ppm
+    
+  
+    // Calculate temperature in °C
+    float temperature = getTemperature(VtempVoltage);
+    
+    // Determine sensitivity adjustment based on temperature
+    float tempAdjustedSensitivity = baselineSensitivity;
+    if (temperature < baselineTemp) {
+      tempAdjustedSensitivity *= (1.0 + (spanCoeffLow * (temperature - baselineTemp)));
+    } else {
+      tempAdjustedSensitivity *= (1.0 + (spanCoeffHigh * (temperature - baselineTemp)));
+    }
+  
+    // Adjust zero shift based on temperature
+    float zeroShift = (temperature < 25.0) 
+                        ? (offsetCoeffLow * (temperature - baselineTemp))
+                        : (offsetCoeffHigh * (temperature - baselineTemp));
+  
+    // Calculate adjusted gas voltage, subtracting zero offset
+    float adjustedGasVoltage = (VgasVoltage - VrefVoltage) - zeroShift - zeroOffset;
+  
+    // Calculate SO2 concentration in ppm
+    float SO2_concentration = adjustedGasVoltage / tempAdjustedSensitivity;
 
-    // Read the analog voltage from the SO2 sensor on A1
-    int sensorValue = analogRead(gasPin);
-    float voltage = sensorValue * (V_REF / 1023.0);  // Calculate the voltage
-
-    // Calculate SO2 concentration in ppm using the confirmed sensitivity from the datasheet
-    float so2_concentration_ppm = (voltage / sensorSensitivity) * calibrationFactor;
-
-    // Convert ppm concentration to micrograms per cubic meter (µg/m^3)
-    float so2_concentration_ug_m3 = so2_concentration_ppm * ppmToMicrogramPerM3;
-
-    // Debugging: Print intermediate values for verification
-    Serial.print("Sensor Value: ");
-    Serial.println(sensorValue);
-    Serial.print("Voltage: ");
-    Serial.println(voltage);
-    Serial.print("SO2 Concentration (ppm): ");
-    Serial.println(so2_concentration_ppm);
-    Serial.print("SO2 Concentration (µg/m³): ");
-    Serial.println(so2_concentration_ug_m3);
-
-    return so2_concentration_ug_m3;
+    // Calculate molecular concentration from ppm
+    float molecularConcentration = VgasPPM * (molecularWeightSO2 / molarVolume);
+    float molecularConcentration2 = VgasPPM * 214.4; 
+  
+    // Print the results
+    Serial.print("Temperature (°C): "); Serial.println(temperature);
+    Serial.print("Temperature-Adjusted Sensitivity (V/ppm): "); Serial.println(tempAdjustedSensitivity);
+    Serial.print("Zero Shift (ppm): "); Serial.println(zeroShift);
+    Serial.print("SO2 Concentration (ppm): "); Serial.println(SO2_concentration);
+    Serial.print("Vref voltage: "); Serial.println(VrefVoltage, 6);
+    Serial.print("Vgas voltage: "); Serial.println(VgasVoltage, 6);
+    Serial.print("Vgas value: "); Serial.println(Vgas, 6);
+    Serial.print("Vgas PPM: "); Serial.println(VgasPPM, 6);
+    Serial.print("Vgas microgram: "); Serial.println(molecularConcentration, 6);
+    Serial.print("Vgas microgram2: "); Serial.println(molecularConcentration2, 6);
+    
+    return SO2_concentration;
   }
+
+// Helper function to convert Vtemp voltage to °C (adjust based on calibration)
+float getTemperature(float VtempVoltage) {
+    float tempCoefficient = 100.0;  // Example conversion factor (mV/°C); adjust as per sensor calibration
+    return (VtempVoltage * 1000) / tempCoefficient; // Convert to °C
+}
