@@ -3,9 +3,13 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Load environment variables from .env file
 
 # Azure Blob Storage details
-connection_string = "DefaultEndpointsProtocol=https;AccountName=airqualityprojectstorage;AccountKey=WvUkZhmlTMTLcrg4pqnFDqkZJYyzpTxyt4wQCOjGF/asiDgOZNLRA1GoL2ZbGH41pVsgXGOKti2r+ASt2DSh7Q==;EndpointSuffix=core.windows.net"
+connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 container_name = "airqualityblobcontainer"
 blob_name = "0_5760c6511b4f4706aea93d0524b7807c_1.json"
 
