@@ -52,6 +52,7 @@ float zeroOffset = 0.0;
 // Function declarations
 unsigned long getTime();
 void connectNB();
+void calibrateZeroOffset();
 void connectMQTT();
 void publishMessage(float pm25, float pm10, float o3microgramPerM3, float so2);
 void onMessageReceived(int messageSize);
@@ -132,6 +133,8 @@ void setup() {
   // Set pin modes
   pinMode(CS_PIN, OUTPUT);
   digitalWrite(CS_PIN, HIGH);
+
+  calibrateZeroOffset();
 
 }
 
@@ -304,62 +307,52 @@ float getAverageRS() {
     return totalRS / NUM_READINGS;
   }
 
-
 float getSO2() {
-    int Vgas = analogRead(VgasPin);      // Read gas concentration
-    int Vref = analogRead(VrefPin);      // Read reference voltage
-    int Vtemp = analogRead(VtempPin);    // Read temperature
+    // Read voltages
+    float VgasVoltage = analogRead(VgasPin) * (3.3 / 1023.0);
+    float VrefVoltage = analogRead(VrefPin) * (3.3 / 1023.0);
+    float VtempVoltage = analogRead(VtempPin) * (3.3 / 1023.0);
   
-    // Convert the analog readings to voltages (assuming 3.3V and 10-bit ADC)
-    double VrefVoltage = Vref * (3.3 / 1023.00);
-    double VtempVoltage = Vtemp * (3.3 / 1023.00);
-    double VgasVoltage = Vgas/1023.00*3.3;
-    float VgasPPM = 1/M*(VgasVoltage-VgasZeroVoltage); // Convert to ppm
-    
-  
-    // Calculate temperature in °C
+    // Calculate temperature
     float temperature = getTemperature(VtempVoltage);
-    
-    // Determine sensitivity adjustment based on temperature
-    float tempAdjustedSensitivity = baselineSensitivity;
-    if (temperature < baselineTemp) {
-      tempAdjustedSensitivity *= (1.0 + (spanCoeffLow * (temperature - baselineTemp)));
-    } else {
-      tempAdjustedSensitivity *= (1.0 + (spanCoeffHigh * (temperature - baselineTemp)));
-    }
   
-    // Adjust zero shift based on temperature
-    float zeroShift = (temperature < 25.0) 
-                        ? (offsetCoeffLow * (temperature - baselineTemp))
-                        : (offsetCoeffHigh * (temperature - baselineTemp));
+    // Sensor parameters
+    const float sensitivityCode = 41.74; // From label (nA/ppm)
+    const float TIA_Gain = 100.0; // kV/A (SO2 from datasheet)
+    const float M = sensitivityCode * TIA_Gain * 1e-6; // 0.004174 V/ppm
   
-    // Calculate adjusted gas voltage, subtracting zero offset
-    float adjustedGasVoltage = (VgasVoltage - VrefVoltage) - zeroShift - zeroOffset;
+    // Temperature compensation
+    float spanAdjust = (temperature < 20.0) ? 
+      1.0 + (-0.0033) * (temperature - 20.0) : 
+      1.0 + 0.0026 * (temperature - 20.0);
   
-    // Calculate SO2 concentration in ppm
-    float SO2_concentration = adjustedGasVoltage / tempAdjustedSensitivity;
-
-    // Calculate molecular concentration from ppm
-    float molecularConcentration = VgasPPM * (molecularWeightSO2 / molarVolume);
-    float molecularConcentration2 = VgasPPM * 214.4; 
+    float zeroShift_ppm = (temperature < 25.0) ? 
+      0.056 * (temperature - 20.0) : 
+      0.46 * (temperature - 20.0);
   
-    // Print the results
-    Serial.print("Temperature (°C): "); Serial.println(temperature);
-    Serial.print("Temperature-Adjusted Sensitivity (V/ppm): "); Serial.println(tempAdjustedSensitivity);
-    Serial.print("Zero Shift (ppm): "); Serial.println(zeroShift);
-    Serial.print("SO2 Concentration (ppm): "); Serial.println(SO2_concentration);
-    Serial.print("Vref voltage: "); Serial.println(VrefVoltage, 6);
-    Serial.print("Vgas voltage: "); Serial.println(VgasVoltage, 6);
-    Serial.print("Vgas value: "); Serial.println(Vgas, 6);
-    Serial.print("Vgas PPM: "); Serial.println(VgasPPM, 6);
-    Serial.print("Vgas microgram: "); Serial.println(molecularConcentration, 6);
-    Serial.print("Vgas microgram2: "); Serial.println(molecularConcentration2, 6);
-    
-    return SO2_concentration;
-  }
-
-// Helper function to convert Vtemp voltage to °C (adjust based on calibration)
-float getTemperature(float VtempVoltage) {
-    float tempCoefficient = 100.0;  // Example conversion factor (mV/°C); adjust as per sensor calibration
-    return (VtempVoltage * 1000) / tempCoefficient; // Convert to °C
+    // Calculate adjusted concentration
+    float adjustedVoltage = (VgasVoltage - VrefVoltage) - zeroOffset;
+    float so2_ppm = (adjustedVoltage - (zeroShift_ppm * M)) / (M * spanAdjust);
+  
+    return so2_ppm < 0 ? 0 : so2_ppm; // Clamp negative values to 0
 }
+  
+// Update temperature calculation based on sensor specifics
+float getTemperature(float VtempVoltage) {
+    // Example calibration: 10 mV/°C, adjust as per datasheet
+    return (VtempVoltage * 1000) / 10.0; // 10 mV/°C
+}
+
+// Run this once in clean air (no SO2) during setup
+void calibrateZeroOffset() {
+  float sum = 0;
+  for(int i=0; i<100; i++) {
+    int VgasRaw = analogRead(VgasPin);
+    int VrefRaw = analogRead(VrefPin);
+    sum += (VgasRaw - VrefRaw) * (3.3 / 1023.0);
+    delay(100);
+  }
+  zeroOffset = sum / 100.0; // Store baseline offset
+  Serial.print("Calibrated zeroOffset: "); Serial.println(zeroOffset, 6);
+}
+
