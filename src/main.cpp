@@ -4,200 +4,245 @@
 #include <utility/ECCX08SelfSignedCert.h>
 #include <ArduinoMqttClient.h>
 #include <MKRNB.h>
-//#include <Arduino_MKRIoTCarrier.h>
 #include <ArduinoJson.h>
-#include <TimeLib.h> // Include the Time library for time conversion
+#include <TimeLib.h>  // Time library for time conversion
 #include <SdsDustSensor.h>
-
+#include <SPI.h>
 #include "arduino_secrets.h"
 
-// Function declarations
-unsigned long getTime();
-void connectNB();
-void connectMQTT();
-void publishMessage(float pm25, float pm10);
-void onMessageReceived(int messageSize);
-float readSensor() {};
-float calculatePPM(float RS) {};
-float calculateMicrogramPerM3(float ppm) {};
+// Pin definitions
+const int CS_PIN = 7; // Chip Select
+const int AN_PIN = A0; // Analog pin
+
+// Constants for O₃ Sensor (Ozone2click)
+const float RL = 10.0;  // Load resistance in kOhms
+const float RO = 3.0;   // Sensor resistance in clean air
+const float A = 0.99;   // MQ131 constant
+const float B = -0.38;  // MQ131 constant
+const int NUM_READINGS = 10;  // Averaging readings
+
+// Constants for SO₂ Sensor
+const int VgasPin = A1;
+const int VrefPin = A2;
+const int VtempPin = A3;
+const float molecularWeightSO2 = 64.07;
+const float molarVolume = 24.45;
+double sensitivityCode = 41.74;  // Example sensitivity code from sensor label
+double TIA_Gain = 100.0; 
+double M = sensitivityCode * TIA_Gain * 0.000001;
+const float baselineTemp = 20.0; 
+float zeroOffset = 0.0;
 
 // Sensitive data in arduino_secrets.h
-const char pinnumber[]   = SECRET_PINNUMBER;
-const char broker[]      = SECRET_BROKER;
-String     deviceId      = SECRET_DEVICE_ID;
+const char pinnumber[] = SECRET_PINNUMBER;
+const char broker[] = SECRET_BROKER;
+String deviceId = SECRET_DEVICE_ID;
 
 // Initialize the dust sensor
 SdsDustSensor sds(Serial1);
 
+// Cellular & MQTT Objects
 NB nbAccess;
 GPRS gprs;
+NBClient nbClient;
+BearSSLClient sslClient(nbClient);
+MqttClient mqttClient(sslClient);
 
-NBClient      nbClient;            // Used for the TCP socket connection
-BearSSLClient sslClient(nbClient); // Used for SSL/TLS connection, integrates with ECC508
-MqttClient    mqttClient(sslClient);
+unsigned long lastMillis = 0;  // Time tracking
 
-unsigned long lastMillis = 0;
+// Function declarations
+unsigned long getTime();
+void connectNB();
+void calibrateZeroOffset();
+void connectMQTT();
+void publishMessage(float pm25, float pm10, float o3, float so2);
+void onMessageReceived(int messageSize);
+float readO3();
+float getSO2();
+float getTemperature(float VtempVoltage);
 
-//IoT Carrier
-//MKRIoTCarrier carrier;
+// Generate a **UUID** for each message
+void generateUUID(char *uuid) {
+    uint16_t r1 = random(0, 0xFFFF);
+    uint16_t r2 = random(0, 0xFFFF);
+    uint16_t r3 = random(0, 0xFFFF);
+    uint16_t r4 = random(0, 0xFFFF);
+    uint16_t r5 = random(0, 0xFFFF);
+    uint16_t r6 = random(0, 0xFFFF);
+    uint16_t r7 = random(0, 0xFFFF);
+    uint16_t r8 = random(0, 0xFFFF);
+
+    sprintf(uuid, "%04x%04x-%04x-%04x-%04x-%04x%04x%04x",
+            r1, r2, r3, r4, r5, r6, r7, r8);
+}
 
 void setup() {
-  Serial.begin(9600);
-  while (!Serial);
+    Serial.begin(9600);
+    while (!Serial);
 
-  if (!ECCX08.begin()) {
-    Serial.println("No ECCX08 present!");
-    while (1);
-  }
+    Serial.println("Initializing...");
 
-  // Reconstruct the self signed cert
-  ECCX08SelfSignedCert.beginReconstruction(0, 8);
-  ECCX08SelfSignedCert.setCommonName(ECCX08.serialNumber());
-  ECCX08SelfSignedCert.endReconstruction();
+    if (!ECCX08.begin()) {
+        Serial.println("No ECCX08 present!");
+        while (1);
+    }
 
-  // Set a callback to get the current time used to validate the servers certificate
-  ArduinoBearSSL.onGetTime(getTime);
+    ECCX08SelfSignedCert.beginReconstruction(0, 8);
+    ECCX08SelfSignedCert.setCommonName(ECCX08.serialNumber());
+    ECCX08SelfSignedCert.endReconstruction();
 
-  // Set the ECCX08 slot to use for the private key and the accompanying public certificate for it
-  sslClient.setEccSlot(0, ECCX08SelfSignedCert.bytes(), ECCX08SelfSignedCert.length());
+    ArduinoBearSSL.onGetTime(getTime);
+    sslClient.setEccSlot(0, ECCX08SelfSignedCert.bytes(), ECCX08SelfSignedCert.length());
 
-  // Set the client id used for MQTT as the device id
-  mqttClient.setId(deviceId);
+    mqttClient.setId(deviceId);
+    String username = String(broker) + "/" + deviceId + "/api-version=2018-06-30";
+    mqttClient.setUsernamePassword(username, "");
+    mqttClient.onMessage(onMessageReceived);
 
-  // Set the username to "<broker>/<device id>/api-version=2018-06-30" and empty password
-  String username;
+    // Initialize SDS011 Dust Sensor
+    sds.begin();
+    sds.setActiveReportingMode();
+    sds.setQueryReportingMode();
 
-  username += broker;
-  username += "/";
-  username += deviceId;
-  username += "/api-version=2018-06-30";
+    // Initialize SPI
+    SPI.begin();
+    pinMode(CS_PIN, OUTPUT);
+    digitalWrite(CS_PIN, HIGH);
 
-  mqttClient.setUsernamePassword(username, "");
-
-  // Set the message callback, this function is called when the MQTTClient receives a message
-  mqttClient.onMessage(onMessageReceived);
-
-  // Initialize the dust sensor
-  sds.begin();
-  sds.setActiveReportingMode();
-  sds.setQueryReportingMode();
-
+    calibrateZeroOffset();
 }
 
 void loop() {
-  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
-    connectNB();
-  }
-
-  if (!mqttClient.connected()) {
-    // MQTT client is disconnected, connect
-    connectMQTT();
-  }
-
-  // poll for new MQTT messages and send keep alives
-  mqttClient.poll();
-
-  // publish a message roughly every 60 seconds.
-  if (millis() - lastMillis > 60000) {
-    lastMillis = millis();
-
-    // Read the dust sensor data
-    PmResult pm = sds.queryPm();
-    if (pm.isOk()) {
-      float pm25 = pm.pm25;
-      float pm10 = pm.pm10;
-      publishMessage(pm25, pm10);
-      
+    if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
+        connectNB();
     }
-    
-  }
+
+    if (!mqttClient.connected()) {
+        connectMQTT();
+    }
+
+    mqttClient.poll();  
+
+    if (millis() - lastMillis > 60000) {
+        lastMillis = millis();
+
+        Serial.println("Reading sensor data...");
+
+        PmResult pm = sds.queryPm();
+        float o3 = readO3();
+        float so2 = getSO2();
+
+        Serial.print("PM2.5: "); Serial.println(pm.pm25);
+        Serial.print("PM10: "); Serial.println(pm.pm10);
+        Serial.print("O3: "); Serial.println(o3);
+        Serial.print("SO2: "); Serial.println(so2);
+
+        if (pm.isOk() && !isnan(o3) && !isnan(so2)) {
+            Serial.println("Publishing data...");
+            publishMessage(pm.pm25, pm.pm10, o3, so2);
+        } else {
+            Serial.println("Invalid sensor readings, skipping publish...");
+        }
+    }
 }
 
 unsigned long getTime() {
-  // get the current time from the cellular module
-  return nbAccess.getTime();
+    return nbAccess.getTime();
 }
 
 void connectNB() {
-  Serial.println("Attempting to connect to the cellular network");
-
-  while ((nbAccess.begin(pinnumber) != NB_READY) ||
-         (gprs.attachGPRS() != GPRS_READY)) {
-    // failed, retry
-    Serial.print(".");
-    delay(1000);
-  }
-
-  Serial.println("You're connected to the cellular network");
-  Serial.println();
+    Serial.println("Attempting to connect to cellular network...");
+    while ((nbAccess.begin(pinnumber) != NB_READY) || (gprs.attachGPRS() != GPRS_READY)) {
+        Serial.print(".");
+        delay(1000);
+    }
+    Serial.println("\nConnected to cellular network!");
 }
 
 void connectMQTT() {
-  Serial.print("Attempting to MQTT broker: ");
-  Serial.print(broker);
-  Serial.println(" ");
+    Serial.print("Connecting to MQTT broker: ");
+    Serial.println(broker);
 
-  while (!mqttClient.connect(broker, 8883)) {
-    // failed, retry
-    Serial.print(".");
-    Serial.println(mqttClient.connectError());
-    delay(5000);
-  }
-  Serial.println();
+    while (!mqttClient.connect(broker, 8883)) {
+        Serial.print("MQTT Connection failed: ");
+        Serial.println(mqttClient.connectError());
+        Serial.println("Retrying in 5 seconds...");
+        delay(5000);
+    }
 
-  Serial.println("You're connected to the MQTT broker");
-  Serial.println();
-
-  // subscribe to a topic
-  mqttClient.subscribe("devices/" + deviceId + "/messages/devicebound/#");
+    Serial.println("Connected to MQTT broker!");
+    mqttClient.subscribe("devices/" + deviceId + "/messages/devicebound/#");
 }
 
-void publishMessage(float pm25, float pm10) {
-  // Get the current time in UTC
-  unsigned long utcTime = getTime();
+void publishMessage(float pm25, float pm10, float o3, float so2) {
+    char uuid[37];
+    generateUUID(uuid);  // Generate a unique ID
 
-  // Convert UTC time to local time (assuming local time is UTC+1)
-  unsigned long localTime = utcTime + 3600; // Adjust for local time zone
-  
-  // Convert local time to human-readable format
-  setTime(localTime);
-  char timeString[25];
-  snprintf(timeString, sizeof(timeString), "%04d-%02d-%02dT%02d:%02d:%02dZ", year(), month(), day(), hour(), minute(), second());
+    DynamicJsonDocument doc(1024);
+    doc["id"] = uuid;
+    doc["partitionKey"] = "Timestamp";
+    doc["deviceId"] = deviceId;
+    doc["timestamp"] = millis();
 
-  //static int messageId = 0; // Declare and initialize the 'meesageId' variable
-  DynamicJsonDocument doc(1024);
-  //doc["id"] = messageId++;
-  //doc["partitionKey"] = "Timestamp";
-  //doc["deviceId"] = deviceId;
-  doc["pm:2.5"] = pm25;
-  doc["pm:10"] = pm10;
-  doc["localTime"] = localTime;
+    JsonObject data = doc.createNestedObject("data");
+    data["pm2.5"] = pm25;
+    data["pm10"] = pm10;
+    data["O3"] = o3;
+    data["SO2"] = so2;
 
-  String telemetry;
-  serializeJson(doc, telemetry);
-  Serial.println(telemetry.c_str());
+    String telemetry;
+    serializeJson(doc, telemetry);
+    Serial.println("Publishing JSON: " + telemetry);
 
-  // send message, the Print interface can be used to set the message contents
-  mqttClient.beginMessage("devices/" + deviceId + "/messages/events/");
-  mqttClient.print(telemetry.c_str());
-  mqttClient.print(millis());
-  mqttClient.endMessage();
+    mqttClient.beginMessage("devices/" + deviceId + "/messages/events/");
+    mqttClient.print(telemetry);
+    mqttClient.endMessage();
 }
 
 void onMessageReceived(int messageSize) {
-  // we received a message, print out the topic and contents
-  Serial.print("Received a message with topic '");
-  Serial.print(mqttClient.messageTopic());
-  Serial.print("', length ");
-  Serial.print(messageSize);
-  Serial.println(" bytes:");
-
-  // use the Stream interface to print the contents
-  while (mqttClient.available()) {
-    Serial.print((char)mqttClient.read());
-  }
-  Serial.println();
-
-  Serial.println();
-
+    Serial.print("Received message: ");
+    while (mqttClient.available()) {
+        Serial.print((char)mqttClient.read());
+    }
+    Serial.println();
 }
+
+float readO3() {
+    digitalWrite(CS_PIN, LOW);
+    int sensorValue = analogRead(AN_PIN);
+    digitalWrite(CS_PIN, HIGH);
+
+    float voltage = sensorValue * (5.0 / 1023.0);
+    float RS = (5.0 - voltage) / voltage * RL;
+    float ratio = RS / RO;
+    return A * pow(ratio, B);  // O₃ value is in ppm
+}
+
+float getSO2() {
+    float VgasVoltage = analogRead(VgasPin) * (3.3 / 1023.0);
+    float VrefVoltage = analogRead(VrefPin) * (3.3 / 1023.0);
+    float VtempVoltage = analogRead(VtempPin) * (3.3 / 1023.0);
+    float temperature = getTemperature(VtempVoltage);
+
+    float spanAdjust = (temperature < 20.0) ? 1.0 + (-0.0033) * (temperature - 20.0) : 1.0 + 0.0026 * (temperature - 20.0);
+    float adjustedVoltage = (VgasVoltage - VrefVoltage) - zeroOffset;
+    float so2 = (adjustedVoltage) / (M * spanAdjust);
+    return so2 < 0 ? 0 : so2;
+}
+
+float getTemperature(float VtempVoltage) {
+    return (VtempVoltage * 1000) / 10.0;
+}
+
+void calibrateZeroOffset() {
+    float sum = 0;
+    for (int i = 0; i < 100; i++) {
+        int VgasRaw = analogRead(VgasPin);
+        int VrefRaw = analogRead(VrefPin);
+        sum += (VgasRaw - VrefRaw) * (3.3 / 1023.0);
+        delay(100);
+    }
+    zeroOffset = sum / 100.0;
+    Serial.print("Calibrated zeroOffset: "); Serial.println(zeroOffset, 6);
+}
+
