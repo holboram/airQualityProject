@@ -118,18 +118,22 @@ void loop() {
     if (millis() - lastMillis > 60000) {
         lastMillis = millis();
 
+        Serial.println("Reading sensor data...");
+        
         PmResult pm = sds.queryPm();
         float o3 = readO3();
         float so2 = getSO2();
         float no2 = getNO2();
 
-        Serial.print("PM2.5: "); Serial.println(pm.pm25);
-        Serial.print("PM10: "); Serial.println(pm.pm10);
-        Serial.print("O3: "); Serial.println(o3);
-        Serial.print("SO2: "); Serial.println(so2);
-        Serial.print("NO2: "); Serial.println(no2);
+        // Formatted serial output with 2 decimal places
+        Serial.print("PM2.5: "); Serial.println(pm.pm25, 2);
+        Serial.print("PM10: "); Serial.println(pm.pm10, 2);
+        Serial.print("O3: "); Serial.println(o3, 2);
+        Serial.print("SO2: "); Serial.println(so2, 2);
+        Serial.print("NO2: "); Serial.println(no2, 2);
 
         if (pm.isOk() && !isnan(o3) && !isnan(so2) && !isnan(no2)) {
+            Serial.println("Publishing data...");
             publishMessage(pm.pm25, pm.pm10, o3, so2, no2);
         } else {
             Serial.println("Invalid readings, skip publish");
@@ -224,6 +228,7 @@ void publishMessage(float pm25, float pm10, float o3, float so2, float no2) {
 
     String telemetry;
     serializeJson(doc, telemetry);
+    Serial.println("Publishing JSON: " + telemetry);
     
     mqttClient.beginMessage("devices/" + deviceId + "/messages/events/");
     mqttClient.print(telemetry);
