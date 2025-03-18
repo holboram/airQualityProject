@@ -88,8 +88,7 @@ void setup() {
     sslClient.setEccSlot(0, ECCX08SelfSignedCert.bytes(), ECCX08SelfSignedCert.length());
 
     mqttClient.setId(deviceId);
-    String username = String(broker) + "/" + deviceId + "/api-version=2018-06-30";
-    mqttClient.setUsernamePassword(username, "");
+    mqttClient.setUsernamePassword(SECRET_USERNAME, SECRET_PASSWORD);
     mqttClient.onMessage(onMessageReceived);
 
     sds.begin();
@@ -253,15 +252,18 @@ void connectMQTT() {
     Serial.print("Connecting to MQTT broker: ");
     Serial.println(broker);
 
-    while (!mqttClient.connect(broker, 8883)) {
+    // Set username and password for HiveMQ Cloud
+    mqttClient.setUsernamePassword(SECRET_USERNAME, SECRET_PASSWORD);
+
+    while (!mqttClient.connect(broker, SECRET_PORT)) {
         Serial.print("MQTT connection failed: ");
         Serial.println(mqttClient.connectError());
         Serial.println("Retrying in 5 seconds...");
         delay(5000);
     }
 
-    Serial.println("Connected to MQTT broker!");
-    mqttClient.subscribe("devices/" + deviceId + "/messages/devicebound/#");
+    Serial.println("Connected to HiveMQ MQTT broker!");
+    mqttClient.subscribe("sensor/data"); // Change topic as needed
 }
 
 void onMessageReceived(int messageSize) {
