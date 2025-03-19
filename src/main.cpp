@@ -252,7 +252,7 @@ void connectMQTT() {
     Serial.print("Connecting to MQTT broker: ");
     Serial.println(broker);
 
-    // Set username and password for HiveMQ Cloud
+    // Set username and password for MQTT connection
     mqttClient.setUsernamePassword(SECRET_USERNAME, SECRET_PASSWORD);
 
     while (!mqttClient.connect(broker, SECRET_PORT)) {
@@ -263,7 +263,7 @@ void connectMQTT() {
     }
 
     Serial.println("Connected to HiveMQ MQTT broker!");
-    mqttClient.subscribe("sensor/data"); // Change topic as needed
+    mqttClient.subscribe("/aqs/sensors"); // Change topic as needed
 }
 
 void onMessageReceived(int messageSize) {
