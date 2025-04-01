@@ -6,18 +6,21 @@
 #include <SdsDustSensor.h>
 #include <SPI.h>
 #include "arduino_secrets.h"
+#include "Ozone2Click.h"
 
-// Pin definitions
+// --- Pin definitions ---
 const int CS_PIN = 7;
 const int AN_PIN = A0;
 
-// O3 Sensor Constants
-const float RL = 10.0;
-const float RO = 3.0;
-const float A = 0.99;
-const float B = -0.38;
+// --- O3 Calibration Constants (updated) ---
+const float RO = 2581.7;
+const float A = 0.10;
+const float B = -1.1;
 
-// SO2 Sensor Constants
+// --- Ozone Sensor instance ---
+Ozone2Click o3Sensor(CS_PIN);
+
+// --- SO2 Sensor ---
 const int VgasPin_SO2 = A1;
 const int VrefPin_SO2 = A2;
 const int VtempPin_SO2 = A3;
@@ -26,7 +29,7 @@ const double TIA_Gain_SO2 = 100.0;
 double M_SO2 = sensitivityCode_SO2 * TIA_Gain_SO2 * 0.000001;
 float zeroOffset_SO2 = 0.0;
 
-// NO2 Sensor Constants
+// --- NO2 Sensor ---
 const int VgasPin_NO2 = A4;
 const int VrefPin_NO2 = A5;
 const int VtempPin_NO2 = A6;
@@ -35,7 +38,7 @@ const double TIA_Gain_NO2 = 499.0;
 double M_NO2 = sensitivityCode_NO2 * TIA_Gain_NO2 * 0.000001;
 float zeroOffset_NO2 = 0.0;
 
-// Network Configuration
+// --- Network Configuration ---
 const char pinnumber[] = SECRET_PINNUMBER;
 const char broker[] = SECRET_BROKER;
 const int mqtt_port = SECRET_PORT;
@@ -47,14 +50,11 @@ GPRS gprs;
 NBClient nbClient;
 MqttClient mqttClient(nbClient);
 
-// Configurable send interval
-const unsigned long sendInterval = 60000; // 1 minute
+const unsigned long sendInterval = 60000;
 unsigned long lastMillis = 0;
-
-// Cached JSON buffer
 String cachedTelemetry = "";
 
-// Function prototypes
+// --- Function Declarations ---
 void connectNB();
 void connectMQTT();
 void publishMessage(float pm25, float pm10, float o3, float so2, float no2);
@@ -68,9 +68,7 @@ void generateUUID(char *uuid);
 
 void setup() {
   Serial.begin(9600);
-  if (Serial) {
-    while (!Serial);
-  }
+  while (!Serial);
 
   mqttClient.setId(deviceId);
   mqttClient.setUsernamePassword(SECRET_USERNAME, SECRET_PASSWORD);
@@ -79,27 +77,19 @@ void setup() {
   sds.setQueryReportingMode();
 
   SPI.begin();
-  pinMode(CS_PIN, OUTPUT);
-  digitalWrite(CS_PIN, HIGH);
+  o3Sensor.begin();
 
   calibrateZeroOffset_SO2();
   calibrateZeroOffset_NO2();
 }
 
 void loop() {
-  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
-    connectNB();
-  }
-
-  if (!mqttClient.connected()) {
-    connectMQTT();
-  }
-
+  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) connectNB();
+  if (!mqttClient.connected()) connectMQTT();
   mqttClient.poll();
 
   if (millis() - lastMillis > sendInterval) {
     lastMillis = millis();
-
     PmResult pm = sds.queryPm();
     float o3 = readO3Average();
     float so2 = getSO2Average();
@@ -121,21 +111,19 @@ void loop() {
   }
 }
 
-// --- Sensor Reading & Averaging ---
 float readO3Average() {
   float sum = 0;
   for (int i = 0; i < 10; i++) {
-    digitalWrite(CS_PIN, LOW);
-    int sensorValue = analogRead(AN_PIN);
-    digitalWrite(CS_PIN, HIGH);
-    float voltage = sensorValue * (5.0 / 1023.0);
-    float RS = (5.0 - voltage) / voltage * RL;
+    long raw = o3Sensor.readRaw();
+    if (raw == -1) continue;
+    float voltage = o3Sensor.rawToVoltage(raw);
+    float RS = o3Sensor.voltageToResistance(voltage);
     float ratio = RS / RO;
-    float o3 = A * pow(ratio, B);
-    sum += o3;
+    float ppm = A * pow(ratio, B);
+    sum += ppm;
     delay(50);
   }
-  return (sum / 10.0) * 1961.0;  // Convert ppm to µg/m³
+  return (sum / 10.0) * 1961.0;
 }
 
 float getSO2Average() {
@@ -172,7 +160,6 @@ float getTemperature(float Vtemp) {
   return (Vtemp * 1000) / 10.0;
 }
 
-// --- MQTT Publishing ---
 void publishMessage(float pm25, float pm10, float o3, float so2, float no2) {
   char uuid[37];
   generateUUID(uuid);
@@ -201,7 +188,6 @@ void publishMessage(float pm25, float pm10, float o3, float so2, float no2) {
   }
 }
 
-// --- Network + MQTT ---
 void connectNB() {
   Serial.println("Connecting to cellular network...");
   while ((nbAccess.begin(pinnumber) != NB_READY) || (gprs.attachGPRS() != GPRS_READY)) {
@@ -221,7 +207,6 @@ void connectMQTT() {
   Serial.println("✅ Connected to MQTT broker!");
 }
 
-// --- Calibration ---
 void calibrateZeroOffset_SO2() {
   float sum = 0;
   for (int i = 0; i < 100; i++) {
@@ -240,7 +225,6 @@ void calibrateZeroOffset_NO2() {
   zeroOffset_NO2 = sum / 100.0;
 }
 
-// --- UUID Generator ---
 void generateUUID(char *uuid) {
   uint16_t r[8];
   for (int i = 0; i < 8; i++) r[i] = random(0, 0xFFFF);
