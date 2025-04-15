@@ -7,7 +7,6 @@
 #include <SPI.h>
 #include "arduino_secrets.h"
 #include "Ozone2Click.h"
-#include <NBSSLClient.h>
 
 // --- Function Declarations ---
 void connectNB();
@@ -61,13 +60,11 @@ String deviceId = SECRET_DEVICE_ID;
 SdsDustSensor sds(Serial1);
 NB nbAccess;
 GPRS gprs;
-NBSSLClient nbSslClient;
-MqttClient mqttClient(nbSslClient);
-//NBClient nbClient;
-//MqttClient mqttClient(nbClient);
+NBClient nbClient;
+MqttClient mqttClient(nbClient);
 
 const unsigned long readInterval = 2 * 60 * 1000UL;
-const unsigned long sendInterval = 15 * 60 * 1000UL;
+const unsigned long sendInterval = 15 * 60 * 1000UL;// Time between sending data to the server
 unsigned long lastReadMillis = 0;
 unsigned long lastSendMillis = 0;
 
@@ -94,6 +91,7 @@ void setup() {
 }
 
 void loop() {
+
   if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) connectNB();
   if (!mqttClient.connected()) connectMQTT();
   mqttClient.poll();
