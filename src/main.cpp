@@ -64,7 +64,7 @@ NBClient nbClient;
 MqttClient mqttClient(nbClient);
 
 const unsigned long readInterval = 2 * 60 * 1000UL;
-const unsigned long sendInterval = 15 * 60 * 1000UL;// Time between sending data to the server
+const unsigned long sendInterval = 5 * 60 * 1000UL;// Time between sending data to the server
 unsigned long lastReadMillis = 0;
 unsigned long lastSendMillis = 0;
 
@@ -212,10 +212,10 @@ void publishMessage(float pm25, float pm10, float o3, float so2, float no2) {
   if (mqttClient.beginMessage("/aqs/sensors")) {
     mqttClient.print(telemetry);
     mqttClient.endMessage();
-    Serial.println("🎉 Message sent.");
+    Serial.println("✅ Message sent.");
     cachedTelemetry = "";
   } else {
-    Serial.println("😔 Failed to send. Caching message.");
+    Serial.println("❌ Failed to send. Caching message.");
     cachedTelemetry = telemetry;
   }
 }
@@ -226,7 +226,7 @@ void connectNB() {
     Serial.print(".");
     delay(1000);
   }
-  Serial.println("📡Connected to NB!");
+  Serial.println("✅ Connected to NB!");
 }
 
 void connectMQTT() {
@@ -236,7 +236,7 @@ void connectMQTT() {
     Serial.println(mqttClient.connectError());
     delay(5000);
   }
-  Serial.println("🛜 Connected to MQTT broker!");
+  Serial.println("✅ Connected to MQTT broker!");
 }
 
 void calibrateZeroOffset_SO2() {
