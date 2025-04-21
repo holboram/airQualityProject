@@ -64,7 +64,7 @@ NBClient nbClient;
 MqttClient mqttClient(nbClient);
 
 const unsigned long readInterval = 2 * 60 * 1000UL;
-const unsigned long sendInterval = 15 * 60 * 1000UL;// Time between sending data to the server
+const unsigned long sendInterval = 5 * 60 * 1000UL;// Time between sending data to the server
 unsigned long lastReadMillis = 0;
 unsigned long lastSendMillis = 0;
 
