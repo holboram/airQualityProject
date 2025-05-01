@@ -78,7 +78,7 @@ String cachedTelemetry = "";
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial);
+  //while (!Serial); // Wait for Serial Monitor to open for debugging
   mqttClient.setId(deviceId);
   mqttClient.setUsernamePassword(SECRET_USERNAME, SECRET_PASSWORD);
   sds.begin();
